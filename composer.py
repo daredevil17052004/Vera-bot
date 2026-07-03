@@ -71,6 +71,16 @@ MASTER_SYSTEM = """You are Vera, magicpin's merchant AI assistant on WhatsApp. Y
   "template_params": ["<param1>", "<param2>", "<param3>"]
 }
 
+## WHAT A STRONG MESSAGE LOOKS LIKE (follow this pattern)
+
+WEAK (score 0): "Hi Doctor, want to run a discount campaign today to increase sales?"
+→ No trigger signal. No merchant fact. No specific offer. No real number.
+
+STRONG (full marks): "190 people in your locality searched for 'Dental Check Up' this week. Your Dental Cleaning @ ₹299 is live — should I push it to them?"
+→ Real search volume. Real offer from catalog. Specific locality. Single YES/NO action. Vera does the work.
+
+The difference: EVERY claim traces to a field in the contexts below. If you can't cite the source, don't write it.
+
 ## send_as RULE
 - If trigger.scope == "customer" → send_as = "merchant_on_behalf"
 - If trigger.scope == "merchant" → send_as = "vera"
@@ -411,6 +421,13 @@ Performance (30d): views={perf.get("views")}, calls={perf.get("calls")}, directi
 7d delta: {json.dumps(perf.get("delta_7d", {}))}
 vs peer median CTR: {perf.get("ctr", 0)} vs peer {peer.get("avg_ctr", 0)} → {"BELOW" if perf.get("ctr", 0) < peer.get("avg_ctr", 0) else "ABOVE"} peer median
 
+⚡ PRE-COMPUTED DEMAND SIGNALS (use these directly in your message):
+  · {perf.get("views", 0)} people viewed this listing in 30 days (~{round(perf.get("views", 0) / 30)} per day)
+  · {perf.get("calls", 0)} calls from {perf.get("views", 0)} views → conversion gap = {round((1 - perf.get("calls", 0) / max(perf.get("views", 0), 1)) * 100, 1)}% of viewers don't call
+  · CTR {"BELOW" if perf.get("ctr", 0) < peer.get("avg_ctr", 0) else "ABOVE"} peer median by {abs(round((perf.get("ctr", 0) - peer.get("avg_ctr", 0)) / max(peer.get("avg_ctr", 0.001), 0.001) * 100, 1))}%
+  · Top local trend: {trends[0].get("query", "N/A") if trends else "N/A"} (delta_yoy={trends[0].get("delta_yoy", 0) if trends else 0})
+  · Lapsed customers (180d+): {cust_agg.get("lapsed_180d_plus", 0)} of {cust_agg.get("total_unique_ytd", 0)} total
+
 Active offers: {json.dumps(active_offers, ensure_ascii=False)}
 All offers: {json.dumps(merchant.get("offers", []), ensure_ascii=False)}
 
@@ -517,19 +534,48 @@ def _validate_and_fix(
 # ---------------------------------------------------------------------------
 
 def _safe_fallback(trigger: dict, merchant: dict, customer: Optional[dict], error: str) -> dict:
-    """Minimal safe message when LLM composition fails."""
+    """Minimal safe message when LLM composition fails. Uses merchant data for specificity."""
     owner = merchant.get("identity", {}).get("owner_first_name", "") if merchant else ""
     name = merchant.get("identity", {}).get("name", "there") if merchant else "there"
+    locality = merchant.get("identity", {}).get("locality", "") if merchant else ""
     t_kind = trigger.get("kind", "update")
     t_scope = trigger.get("scope", "merchant")
     t_suppression = trigger.get("suppression_key", f"fallback:{t_kind}")
 
+    greeting = owner or name
+
     if customer:
         cust_name = customer.get("identity", {}).get("name", "")
-        body = f"Hi {cust_name}, {name} here. We have an update for you — please reply YES if you'd like to know more."
+        cust_merchant = merchant.get("identity", {}).get("name", "") if merchant else ""
+        last_visit = customer.get("relationship", {}).get("last_visit", "")
+        last_visit_str = f" (last visit: {last_visit})" if last_visit else ""
+        body = f"Hi {cust_name}, {cust_merchant} here{last_visit_str}. We have an update for you — reply YES if you'd like to know more, STOP to opt out."
         send_as = "merchant_on_behalf"
     else:
-        body = f"Hi {owner or name}! Quick update from Vera — we have something relevant for your business. Reply YES to hear more, STOP to opt out."
+        # Build a specific fallback using merchant performance data
+        perf = merchant.get("performance", {}) if merchant else {}
+        views = perf.get("views", 0)
+        calls = perf.get("calls", 0)
+        active_offers = [o for o in (merchant.get("offers", []) if merchant else []) if o.get("status") == "active"]
+        best_offer = active_offers[0].get("title", "") if active_offers else ""
+        loc_str = f"in {locality}" if locality else "on magicpin"
+
+        if views and best_offer:
+            body = (
+                f"Hi {greeting}! {views:,} people viewed your listing {loc_str} this month"
+                f" — but only {calls} called. Your {best_offer} is live."
+                f" Should I draft a WhatsApp to close that gap? Reply YES."
+            )
+        elif views:
+            body = (
+                f"Hi {greeting}! {views:,} people searched for you {loc_str} this month."
+                f" There's something worth acting on — reply YES to hear more, STOP to opt out."
+            )
+        else:
+            body = (
+                f"Hi {greeting}! Quick update from Vera — there's a relevant signal"
+                f" for {name} right now. Reply YES to hear more, STOP to opt out."
+            )
         send_as = "vera"
 
     return {
@@ -537,7 +583,7 @@ def _safe_fallback(trigger: dict, merchant: dict, customer: Optional[dict], erro
         "cta": "binary_yes_stop",
         "send_as": send_as,
         "suppression_key": t_suppression,
-        "rationale": f"Fallback message: LLM composition failed ({error[:100]}). Merchant={name}, trigger_kind={t_kind}.",
+        "rationale": f"Grounded fallback: LLM unavailable ({error[:80]}). Used merchant views/offers from context.",
         "template_name": f"vera_{t_kind}_fallback_v1",
-        "template_params": [owner or name, t_kind, ""],
+        "template_params": [greeting or name, t_kind, locality or ""],
     }

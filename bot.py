@@ -147,14 +147,21 @@ async def tick(body: TickBody):
     if not available:
         return {"actions": []}
 
-    # Fire all compositions in parallel
-    tasks = [_try_compose_for_trigger(tid) for tid in available]
+    # Use a semaphore to cap concurrent LLM calls at 3.
+    # Without this, 20 simultaneous Gemini calls cause burst 429s.
+    import asyncio
+    sem = asyncio.Semaphore(3)
+
+    async def _gated(tid: str):
+        async with sem:
+            return await _try_compose_for_trigger(tid)
+
+    tasks = [_gated(tid) for tid in available]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     actions = []
     for result in results:
         if isinstance(result, Exception):
-            # Log but don't fail the whole tick
             continue
         if result is not None:
             actions.append(result)
