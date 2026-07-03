@@ -68,7 +68,11 @@ async def call_gemini(system_prompt: str, user_prompt: str) -> str:
             last_error = e
             if e.response.status_code in (429, 503) and attempt < MAX_RETRIES:
                 import asyncio
-                await asyncio.sleep(1.0 * (attempt + 1))
+                # 429 = quota hit. Wait progressively: 4s then 10s.
+                # With Semaphore(3) on the caller side, bursts are limited,
+                # so a short-ish wait is usually enough to recover.
+                wait = [4, 10][min(attempt, 1)]
+                await asyncio.sleep(wait)
                 continue
             raise RuntimeError(f"Gemini HTTP error {e.response.status_code}: {e.response.text[:200]}") from e
         except Exception as e:

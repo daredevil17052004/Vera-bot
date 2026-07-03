@@ -142,6 +142,8 @@ async def _compose_reply(
 
     # Build a synthetic "reply trigger" so the composer has context
     # about why we're composing and what the merchant said
+    category_slug = category.get("slug", "")
+    category_voice = category.get("voice", {}).get("tone", "")
     reply_trigger = {
         "id": f"reply_{conv_id}_{turn_number}",
         "scope": "customer" if customer else "merchant",
@@ -155,6 +157,8 @@ async def _compose_reply(
             "turn_number": turn_number,
             "intent_topic": _extract_topic(message, conv),
             "merchant_last_message": message,
+            "category_slug": category_slug,
+            "category_voice": category_voice,
         },
         "urgency": 4,
         "suppression_key": f"reply:{conv_id}:{turn_number}",
@@ -269,20 +273,19 @@ async def handle_reply(
 
     # --- Out-of-scope question ---
     if intent == "out_of_scope":
-        # Compose a polite decline + redirect, using the LLM
+        # Polite redirect — stay on-mission, don't abandon the thread
         prev_turns = conv.get("turns", [])
-        # Find the last vera message to redirect back to
         last_vera_body = ""
         for t in reversed(prev_turns):
             if t.get("from") == "vera":
                 last_vera_body = t.get("body", "")[:80]
                 break
-
+        redirect = f" Picking up where we left off — {last_vera_body[:50]}..." if last_vera_body else ""
         return {
             "action": "send",
-            "body": f"That's outside what I can help with directly — you'd want your CA for that. Circling back — {last_vera_body[:60]}... — want to continue from here?",
+            "body": f"That's outside what I handle — a CA or tax consultant would be your best bet for that. {redirect} Want to continue? Reply YES.",
             "cta": "binary_yes_stop",
-            "rationale": "Merchant asked out-of-scope question. Politely declined and redirected back to the original conversation thread.",
+            "rationale": "Merchant asked out-of-scope question. Politely declined and redirected to original conversation thread.",
         }
 
     # =========================================================
