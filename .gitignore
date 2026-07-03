@@ -12,4 +12,3 @@ venv/
 env/
 *.log
 submission.jsonl
-dataset/expanded/

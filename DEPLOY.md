@@ -27,7 +27,7 @@ In Railway → your service → **Variables** tab, add:
 
 | Variable | Value |
 |---|---|
-| `GEMINI_API_KEY` | `AQ.Ab8RN6I3r_CRIHUEFzLA_Cn5mR_h0wUrWaDRwBSrQezBhs8UYg` |
+| `GEMINI_API_KEY` | your Gemini API key |
 | `GEMINI_MODEL` | `gemini-2.5-flash` |
 | `TEAM_NAME` | `Ansh Sharma` |
 | `CONTACT_EMAIL` | `ansh.sharma@kalvium.community` |

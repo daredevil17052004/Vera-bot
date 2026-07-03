@@ -27,7 +27,7 @@ BOT_URL = "https://web-production-6af5f.up.railway.app"
 LLM_PROVIDER = "gemini"
 
 # Your API key (paste your key here)
-LLM_API_KEY = "AQ.Ab8RN6I3r_CRIHUEFzLA_Cn5mR_h0wUrWaDRwBSrQezBhs8UYg"  # <-- PUT YOUR API KEY HERE
+LLM_API_KEY = os.getenv("LLM_API_KEY", "")  # set via environment variable or paste here
 
 # Model to use (leave empty for default, or specify like "gpt-4o", "claude-3-5-sonnet-20241022", etc.)
 LLM_MODEL = "gemini-2.5-flash"  # <-- Optional: specify model or leave empty for default
