@@ -84,10 +84,15 @@ def load_dataset(dataset_dir: Path) -> tuple[dict, dict, dict, dict]:
 
 def load_test_pairs(dataset_dir: Path) -> list[dict]:
     """Load the 30 canonical test pairs."""
-    # Try expanded dataset first
     pairs_file = dataset_dir / "test_pairs.json"
     if pairs_file.exists():
-        return json.loads(pairs_file.read_text(encoding="utf-8"))
+        data = json.loads(pairs_file.read_text(encoding="utf-8"))
+        # Handle both flat list and {"pairs": [...]} wrapper formats
+        if isinstance(data, list):
+            return data
+        elif isinstance(data, dict):
+            return data.get("pairs", data.get("test_pairs", []))
+        return data
 
     # Fallback: generate test pairs from seed data (first 25 triggers)
     print("[WARN] test_pairs.json not found — using first 25 seed triggers as test pairs.")
@@ -119,7 +124,7 @@ async def run(dataset_dir: Path, out_file: Path):
     print(f"  Test pairs: {len(test_pairs)}")
 
     lines = []
-    for pair in test_pairs:
+    for i, pair in enumerate(test_pairs):
         test_id = pair["test_id"]
         trigger_id = pair["trigger_id"]
         merchant_id = pair.get("merchant_id", "")
@@ -147,41 +152,60 @@ async def run(dataset_dir: Path, out_file: Path):
 
         customer = customers.get(customer_id) if customer_id else None
 
-        print(f"  Composing {test_id}: {trigger.get('kind')} → {merchant.get('identity', {}).get('name', merchant_id)}")
+        print(f"  Composing {test_id} ({i+1}/30): {trigger.get('kind')} → {merchant.get('identity', {}).get('name', merchant_id)}")
 
-        try:
-            result = await compose(category, merchant, trigger, customer)
-            line = {
-                "test_id": test_id,
-                "trigger_id": trigger_id,
-                "merchant_id": merchant_id,
-                "customer_id": customer_id,
-                "body": result.get("body", ""),
-                "cta": result.get("cta", "open_ended"),
-                "send_as": result.get("send_as", "vera"),
-                "suppression_key": result.get("suppression_key", trigger.get("suppression_key", "")),
-                "rationale": result.get("rationale", ""),
-                "template_name": result.get("template_name", ""),
-                "template_params": result.get("template_params", []),
-            }
-            lines.append(line)
-            print(f"    ✓ {len(result.get('body', ''))} chars, cta={result.get('cta')}, send_as={result.get('send_as')}")
-        except Exception as e:
-            print(f"    ✗ FAILED: {e}")
-            # Write a placeholder so we still have 30 lines
-            lines.append({
-                "test_id": test_id,
-                "trigger_id": trigger_id,
-                "merchant_id": merchant_id,
-                "customer_id": customer_id,
-                "body": f"[ERROR composing {test_id}: {str(e)[:100]}]",
-                "cta": "open_ended",
-                "send_as": "vera",
+        # Rate-limit retry: attempt up to 3 times with exponential backoff
+        result = None
+        for attempt in range(3):
+            try:
+                result = await compose(category, merchant, trigger, customer)
+                # If it's a fallback (generic body), wait and retry
+                body = result.get("body", "")
+                if "Quick update from Vera" in body or "We have an update for you" in body:
+                    if attempt < 2:
+                        wait = 10 * (attempt + 1)
+                        print(f"    [rate-limit fallback] retrying in {wait}s...")
+                        await asyncio.sleep(wait)
+                        continue
+                break  # Real LLM output — done
+            except Exception as e:
+                if attempt < 2:
+                    wait = 10 * (attempt + 1)
+                    print(f"    [error: {str(e)[:50]}] retrying in {wait}s...")
+                    await asyncio.sleep(wait)
+                else:
+                    print(f"    ✗ FAILED after 3 attempts: {e}")
+                    result = None
+
+        if result is None:
+            result = {
+                "body": f"[ERROR composing {test_id}]",
+                "cta": "open_ended", "send_as": "vera",
                 "suppression_key": trigger.get("suppression_key", ""),
-                "rationale": f"Composition failed: {str(e)[:200]}",
-                "template_name": "",
-                "template_params": [],
-            })
+                "rationale": "Composition failed after 3 attempts.",
+                "template_name": "", "template_params": [],
+            }
+
+        body = result.get("body", "")
+        line = {
+            "test_id": test_id,
+            "trigger_id": trigger_id,
+            "merchant_id": merchant_id,
+            "customer_id": customer_id,
+            "body": body,
+            "cta": result.get("cta", "open_ended"),
+            "send_as": result.get("send_as", "vera"),
+            "suppression_key": result.get("suppression_key", trigger.get("suppression_key", "")),
+            "rationale": result.get("rationale", ""),
+            "template_name": result.get("template_name", ""),
+            "template_params": result.get("template_params", []),
+        }
+        lines.append(line)
+        print(f"    ✓ {len(body)} chars, cta={result.get('cta')}, send_as={result.get('send_as')}")
+
+        # Rate limit: wait 7s between calls (Gemini free = 10 RPM)
+        if i < len(test_pairs) - 1:
+            await asyncio.sleep(7)
 
     # Write JSONL
     out_file.write_text(
