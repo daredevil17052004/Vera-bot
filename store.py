@@ -47,6 +47,9 @@ _customer_to_merchant: dict[str, str] = {}
 # ---------------------------------------------------------------------------
 _conversations: dict[str, dict] = {}
 
+# merchant_id → {"count": int, "text": str}
+_merchant_auto_replies: dict[str, dict] = {}
+
 # ---------------------------------------------------------------------------
 # Suppression registry: suppression_key → True (already sent)
 # ---------------------------------------------------------------------------
@@ -257,22 +260,20 @@ def get_previous_bodies(conversation_id: str) -> list[str]:
     return [t["body"] for t in conv["turns"] if t["from"] == "vera"]
 
 
-def increment_auto_reply(conversation_id: str, text: str) -> int:
-    """Track consecutive auto-reply occurrences. Returns new count."""
-    conv = get_or_create_conversation(conversation_id)
-    if conv.get("last_auto_reply_text") == text:
-        conv["auto_reply_count"] = conv.get("auto_reply_count", 0) + 1
+def increment_auto_reply(merchant_id: str, text: str) -> int:
+    """Track consecutive auto-reply occurrences per merchant. Returns new count."""
+    state = _merchant_auto_replies.setdefault(merchant_id, {"count": 0, "text": None})
+    if state["text"] == text:
+        state["count"] += 1
     else:
-        conv["auto_reply_count"] = 1
-        conv["last_auto_reply_text"] = text
-    return conv["auto_reply_count"]
+        state["count"] = 1
+        state["text"] = text
+    return state["count"]
 
 
-def reset_auto_reply(conversation_id: str) -> None:
-    conv = _conversations.get(conversation_id)
-    if conv:
-        conv["auto_reply_count"] = 0
-        conv["last_auto_reply_text"] = None
+def reset_auto_reply(merchant_id: str) -> None:
+    if merchant_id in _merchant_auto_replies:
+        _merchant_auto_replies[merchant_id] = {"count": 0, "text": None}
 
 
 def wipe_all() -> None:
@@ -286,4 +287,5 @@ def wipe_all() -> None:
     _customer_to_merchant.clear()
     _conversations.clear()
     _suppressed.clear()
+    _merchant_auto_replies.clear()
     _counts.update({"category": 0, "merchant": 0, "customer": 0, "trigger": 0})

@@ -216,7 +216,7 @@ async def handle_reply(
     # 1. AUTO-REPLY DETECTION
     # =========================================================
     if detect_auto_reply(message):
-        auto_count = store.increment_auto_reply(conversation_id, message)
+        auto_count = store.increment_auto_reply(merchant_id, message)
 
         if auto_count == 1:
             # First auto-reply: send ONE message flagging it for the owner
@@ -242,7 +242,7 @@ async def handle_reply(
             }
 
     # Not an auto-reply — reset the auto-reply counter
-    store.reset_auto_reply(conversation_id)
+    store.reset_auto_reply(merchant_id)
 
     # =========================================================
     # 2. INTENT DETECTION
